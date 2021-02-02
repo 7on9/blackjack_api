@@ -17,3 +17,5 @@ export interface IDeckValue {
   status: TDeckValueStatus
   value: number
 }
+
+export type TDuelResult = 'WIN' | 'LOSE' | 'DRAW'
