@@ -1,7 +1,7 @@
 import dotenv from 'dotenv'
 dotenv.config()
 import app from './app'
-// import cors from 'cors'
+import cors from 'cors'
 // import socket from './socket'
 
 // app.use(cors({}))
