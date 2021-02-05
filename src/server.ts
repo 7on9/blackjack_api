@@ -2,9 +2,9 @@ import dotenv from 'dotenv'
 dotenv.config()
 import app from './app'
 import cors from 'cors'
-// import socket from './socket'
+import GameSocket from './controllers/game/socket'
 
-// app.use(cors({}))
+app.use(cors({}))
 
 import http from 'http'
 import { ICard } from './@types'
@@ -12,9 +12,13 @@ import { caculatePoint } from './services/game'
 import { duel } from './services/player'
 const server = http.createServer(app)
 
+import { Server } from 'socket.io'
 // const io = require('socket.io').listen(server)
 
-// socket(io)
+const socketIO = new Server(server, { cors: { origin: '*' }})
+
+GameSocket(socketIO)
+// socketIO.origins()
 // io.origins()
 
 const PORT = process.env.PORT || 2409

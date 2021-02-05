@@ -1,4 +1,4 @@
-import { Socket } from 'socket.io'
+import { Server, Socket } from 'socket.io'
 import { ICard, TPlayerStatus, TPlayerType } from '../../@types'
 import { IObjectProps } from '../../common/@types'
 import { GAME, PLAYER, RESPONSE } from '../../constants'
@@ -35,7 +35,7 @@ export interface IRoom {
 const ROOMS: IObjectProps<IRoom> = {}
 let numberOfRoom = 0
 
-const GameSocket = (io: Socket) => {
+const GameSocket = (io: Server) => {
   try {
     io.on('connection', (socket) => {
       console.log('[CONNECT] user connected ' + socket.id)
