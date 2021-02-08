@@ -18,8 +18,6 @@ import { Server } from 'socket.io'
 const socketIO = new Server(server, { cors: { origin: '*' }})
 
 GameSocket(socketIO)
-// socketIO.origins()
-// io.origins()
 
 const PORT = process.env.PORT || 2409
 
@@ -27,34 +25,34 @@ server.listen(PORT, () => {
   const deck: ICard[] = [
     {
       value: 'A',
-      kind: 'clubs',
+      kind: 'club',
     },
     {
       value: 2,
-      kind: 'clubs',
+      kind: 'club',
     },
     {
       value: 3,
-      kind: 'clubs',
+      kind: 'club',
     },
     {
       value: 4,
-      kind: 'clubs',
+      kind: 'club',
     },
     {
       value: 4,
-      kind: 'clubs',
+      kind: 'club',
     },
   ]
 
   const deck2: ICard[] = [
     {
       value: 'A',
-      kind: 'clubs',
+      kind: 'club',
     },
     {
       value: 9,
-      kind: 'clubs',
+      kind: 'club',
     },
   ]
 

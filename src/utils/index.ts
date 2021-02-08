@@ -3,7 +3,7 @@ import { getRandomIntInclusive } from '../common/utils'
 
 export const generateDeck = (): ICard[] => {
   const values: TCardValue[] = [2, 3, 4, 5, 6, 7, 8, 9, 10, 'J', 'Q', 'K', 'A']
-  const kinds: TKind[] = ['spades', 'clubs', 'diamonds', 'hearts']
+  const kinds: TKind[] = ['spade', 'club', 'diamond', 'heart']
   const cards: ICard[] = []
   for (let iValue = 0; iValue < values.length; iValue++) {
     const value = values[iValue]
