@@ -1,8 +1,9 @@
 import { Server, Socket } from 'socket.io'
-import { ICard, TPlayerStatus, TPlayerType } from '../../@types'
+import { ICard, TPlayerStatus, TPlayerType, TGamePhase } from '../../@types'
 import { IObjectProps } from '../../common/@types'
 import { GAME, PLAYER, RESPONSE } from '../../constants'
-import { generateDeck } from '../../utils'
+import DeckServices from '../../services/game/deck'
+import { generateDeck, shuffleArray } from '../../utils'
 
 const MAX_PLAYER = 10
 const COLORS = [
@@ -18,18 +19,45 @@ const COLORS = [
   '#000000',
 ]
 
+const clonePlayerWithPrivateCards = (player: IPlayer) => {
+  let cards = player.cards.map(() => ({ value: null, kind: null }))
+  return {
+    ...player,
+    cards
+  }
+}
+
+const clonePrivateDeck = (deck: ICard[]) => {
+  return deck.map(() => ({ value: null, kind: null }))
+}
+
+const privateRoom = (room: IRoom) => {
+  let deck = clonePrivateDeck(room.deck)
+  let players = room.players.map(player => clonePlayerWithPrivateCards(player))
+  let host = clonePlayerWithPrivateCards(room.host)
+  return {
+    ...room,
+    deck,
+    players,
+    host,
+  }
+}
+
 export interface IPlayer {
   cards: ICard[]
   username: string
   status: TPlayerStatus | null
   role: TPlayerType
   color: string
+  socketId: string
 }
 
 export interface IRoom {
   players: IPlayer[]
   host: IPlayer
   deck: ICard[]
+  phase: TGamePhase
+  message: string
 }
 
 const ROOMS: IObjectProps<IRoom> = {}
@@ -42,22 +70,32 @@ const GameSocket = (io: Server) => {
 
       //creating the game
       socket.on(GAME.CREATE, async (username: string, color?: string) => {
+        console.log('[CREATE] ' + username + ' request create game.')
         const idRoom = 1000 + numberOfRoom
-        ROOMS[idRoom] = {
+        let newRoom: IRoom = {
           deck: generateDeck(),
           host: {
+            socketId: socket.id,
             cards: [],
             username,
             status: null,
             role: 'HOST',
             color: color ? color : COLORS[0],
           },
+          phase: 'WAITING_PLAYER',
+          message: 'Đang đợi những người chơi khác...',
           players: [],
         }
+        ROOMS[idRoom] = newRoom
+        numberOfRoom++
+        console.log('[CREATE][SUCCESS] ROOM-' + idRoom + ' host:' + username)
         socket.emit(GAME.CREATE, {
           status: RESPONSE.SUCCESS,
           code: 200,
-          data: idRoom,
+          data: {
+            room: privateRoom(newRoom),
+            idRoom,
+          },
         })
         socket.join(`ROOM-${idRoom}`)
       })
@@ -81,7 +119,10 @@ const GameSocket = (io: Server) => {
             })
             return
           }
-          if (username in room.players) {
+          if (
+            room.players.findIndex((p) => p.username == username) >= 0 ||
+            room.host.username == username
+          ) {
             socket.emit(PLAYER.JOIN, {
               status: RESPONSE.ERROR,
               code: 400,
@@ -93,6 +134,7 @@ const GameSocket = (io: Server) => {
               status: 'WAITING',
               cards: [],
               role: 'PLAYER',
+              socketId: socket.id,
               color: COLORS[room.players.length - 1],
             })
             socket.emit(PLAYER.JOIN, {
@@ -100,13 +142,22 @@ const GameSocket = (io: Server) => {
               code: 200,
               data: {
                 username,
-                status: 'WAITING',
-                cards: [],
-                role: 'PLAYER',
-                color: COLORS[room.players.length - 1],
+                room,
+                thisPlayer: {
+                  status: 'WAITING',
+                  cards: [],
+                  role: 'PLAYER',
+                  color: COLORS[room.players.length - 1],
+                },
               },
             })
-            io.to(`ROOM-${idRoom}`).emit(GAME.NEW_PLAYER, ROOMS[idRoom].players)
+            io.to(`ROOM-${idRoom}`).emit(GAME.NEW_PLAYER, {
+              status: RESPONSE.SUCCESS,
+              code: 200,
+              data: {
+                room,
+              },
+            })
             console.log(
               `[JOIN][SUCCESS] - ${idRoom} - players: ${ROOMS[idRoom].players.length}`
             )
@@ -115,12 +166,85 @@ const GameSocket = (io: Server) => {
         }
       })
 
-      // //starting the game
-      // socket.on(GAME.BEGIN, idGame => {
-      //   //emit to room game except sender
-      //   console.log(`Game begin: ${idGame}`)
-      //   io.to(idGame).emit(GAME.BEGIN)
-      // })
+      //starting the game
+      socket.on(GAME.START, (idRoom: string) => {
+        console.log(`Game begin: ${idRoom}`)
+        let room = ROOMS[idRoom]
+        room.phase = 'PREPARE'
+        ROOMS[idRoom] = room
+        io.to(`ROOM-${idRoom}`).emit(GAME.START,{
+          status: RESPONSE.SUCCESS,
+          code: 200,
+          data: {
+            room: privateRoom(room),
+          },
+        })
+      })
+
+      socket.on(PLAYER.SHUFFLE_DECK, (username: string, idRoom: string) => {
+        console.log(`Shuffle deck: ${idRoom}`)
+        let room = ROOMS[idRoom]
+        room.deck = shuffleArray(room.deck)
+        room.message = `${username} xáo bài.`
+        ROOMS[idRoom] = room
+        io.to(`ROOM-${idRoom}`).emit(PLAYER.SHUFFLE_DECK,{
+          status: RESPONSE.SUCCESS,
+          code: 200,
+          data: {
+            room: privateRoom(room),
+          },
+        })
+      })
+      
+      socket.on(GAME.PHASE_DIVIDE_DECK, (idRoom: string) => {
+        console.log(`Divide deck: ${idRoom}`)
+        let room = ROOMS[idRoom]
+        room.phase = 'DIVIDE_CARDS'
+        
+        room.message = 'Đang chia bài'
+        
+        for (let round = 0; round < 2; round++) {
+          
+          for (let iPlayer = 0; iPlayer < room.players.length; iPlayer++) {
+            let player = room.players[iPlayer]
+            let { deck, card } = DeckServices.getCardFromDeck(room.deck, 'top')
+            room.players[iPlayer].cards.push(card as ICard)
+            room.deck = deck
+            //emit to player that a new card has been draw
+            io.to(player.socketId).emit(PLAYER.DRAW_CARD, {
+              status: RESPONSE.SUCCESS,
+              code: 200,
+              data: {
+                thisPlayer: room.players[iPlayer],
+              },  
+            })
+          }
+          
+          let { deck, card } = DeckServices.getCardFromDeck(room.deck, 'top')
+          room.host.cards.push(card as ICard)
+          room.deck = deck
+          //emit to player that a new card has been draw
+          io.to(room.host.socketId).emit(PLAYER.DRAW_CARD, {
+            status: RESPONSE.SUCCESS,
+            code: 200,
+            data: {
+              thisPlayer: room.host,
+            },  
+          })
+        }
+        
+        room.message = 'Chia bài xong!'
+        
+        ROOMS[idRoom] = room
+
+        io.to(`ROOM-${idRoom}`).emit(GAME.START,{
+          status: RESPONSE.SUCCESS,
+          code: 200,
+          data: {
+            room: privateRoom(room),
+          },
+        })
+      })
 
       // //new question
       // socket.on(GAME.NEXT_QUESTION, (idGame, idQuestion) => {
