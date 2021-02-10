@@ -1,8 +1,15 @@
 import { Server, Socket } from 'socket.io'
-import { ICard, TPlayerStatus, TPlayerType, TGamePhase } from '../../@types'
+import {
+  ICard,
+  TPlayerStatus,
+  TPlayerType,
+  TGamePhase,
+  TDuelResult,
+} from '../../@types'
 import { IObjectProps } from '../../common/@types'
 import { GAME, PLAYER, RESPONSE } from '../../constants'
 import DeckServices from '../../services/game/deck'
+import { duel } from '../../services/player'
 import { generateDeck, shuffleArray } from '../../utils'
 
 const MAX_PLAYER = 10
@@ -20,6 +27,7 @@ const COLORS = [
 ]
 
 const clonePlayerWithPrivateCards = (player: IPlayer) => {
+  if (player.status == 'SHOW_HAND') return player
   let cards = player.cards.map(() => ({ value: null, kind: null }))
   return {
     ...player,
@@ -45,6 +53,17 @@ const privateRoom = (room: IRoom) => {
   }
 }
 
+const newGame = (room: IRoom) => {
+  room.message = 'Đang chuản bị'
+  room.currentTurn = 0
+  room.deck = generateDeck()
+  room.host.cards = []
+  room.host.duelResult = undefined
+  room.phase = 'WAITING_PLAYER'
+  room.players = room.players.map((p) => ({ ...p, cards: [], duelResult: undefined, status: 'WAITING' }))
+  return room
+}
+
 export interface IPlayer {
   cards: ICard[]
   username: string
@@ -52,6 +71,7 @@ export interface IPlayer {
   role: TPlayerType
   color: string
   socketId: string
+  duelResult?: TDuelResult
 }
 
 export interface IRoom {
@@ -64,6 +84,8 @@ export interface IRoom {
 }
 
 const ROOMS: IObjectProps<IRoom> = {}
+const SOCKETS: IObjectProps<any> = {}
+
 let numberOfRoom = 0
 
 const GameSocket = (io: Server) => {
@@ -248,6 +270,7 @@ const GameSocket = (io: Server) => {
 
           room.message = 'Chia bài xong!'
           room.players[0].status = 'DRAW'
+          room.phase = 'DUEL'
           ROOMS[idRoom] = room
 
           io.to(`ROOM-${idRoom}`).emit(GAME.START, {
@@ -301,6 +324,111 @@ const GameSocket = (io: Server) => {
         }
       })
 
+      socket.on(
+        PLAYER.SHOW_HAND,
+        (idRoom: string, username: string, role: TPlayerType) => {
+          let room = ROOMS[idRoom]
+
+          let iPlayer = room.players.findIndex((p) => p.username == username)
+          let player = null
+
+          if (role == 'HOST') {
+            if (username === room.host.username) {
+              for (let iP = 0; iP < room.players.length; iP++) {
+                const p = room.players[iP]
+                p.status = 'SHOW_HAND'
+                const duelResult = duel(room.host.cards, p.cards)
+                p.duelResult =
+                  duelResult < 0 ? 'LOSE' : duelResult == 0 ? 'DRAW' : 'WIN'
+                io.to(p.socketId).emit(PLAYER.SHOW_HAND, {
+                  status: RESPONSE.SUCCESS,
+                  code: 200,
+                  data: {
+                    thisPlayer: p,
+                  },
+                })
+                room.players[iP] = p
+              }
+              room.host.status = 'SHOW_HAND'
+              ROOMS[idRoom] = room
+              io.to(`ROOM-${idRoom}`).emit(PLAYER.SHOW_HAND, {
+                status: RESPONSE.SUCCESS,
+                code: 200,
+                data: {
+                  room: privateRoom(room),
+                },
+              })
+            } else {
+              if (iPlayer >= 0) {
+                player = room.players[iPlayer]
+                if (player.status === 'STAND') {
+                  const duelResult = duel(room.host.cards, player.cards)
+                  player.duelResult =
+                    duelResult < 0 ? 'LOSE' : duelResult == 0 ? 'DRAW' : 'WIN'
+                  player.status = 'SHOW_HAND'
+                  room.players[iPlayer] = player
+                  ROOMS[idRoom] = room
+                  io.to(player.socketId).emit(PLAYER.SHOW_HAND, {
+                    status: RESPONSE.SUCCESS,
+                    code: 200,
+                    data: {
+                      thisPlayer: player,
+                    },
+                  })
+
+                  io.to(`ROOM-${idRoom}`).emit(PLAYER.SHOW_HAND, {
+                    status: RESPONSE.SUCCESS,
+                    code: 200,
+                    data: {
+                      room: privateRoom(room),
+                    },
+                  })
+                }
+              }
+            }
+          } else {
+            if (iPlayer >= 0) {
+              player = room.players[iPlayer]
+              player.status = 'SHOW_HAND'
+              room.message = `${username} bốc xong`
+              const duelResult = duel(room.host.cards, player.cards)
+              player.duelResult =
+                duelResult < 0 ? 'LOSE' : duelResult == 0 ? 'DRAW' : 'WIN'
+              room.currentTurn++
+              if (room.currentTurn < room.players.length) {
+                room.players[room.currentTurn].status = 'DRAW'
+              } else {
+                room.host.status = 'DRAW'
+                io.to(room.host.socketId).emit(PLAYER.DRAW_CARD, {
+                  status: RESPONSE.SUCCESS,
+                  code: 200,
+                  data: {
+                    thisPlayer: room.host,
+                  },
+                })
+              }
+              room.players[iPlayer] = player
+              ROOMS[idRoom] = room
+              io.to(player.socketId).emit(PLAYER.SHOW_HAND, {
+                status: RESPONSE.SUCCESS,
+                code: 200,
+                data: {
+                  thisPlayer: player,
+                },
+              })
+
+              io.to(`ROOM-${idRoom}`).emit(PLAYER.SHOW_HAND, {
+                status: RESPONSE.SUCCESS,
+                code: 200,
+                data: {
+                  room: privateRoom(room),
+                },
+              })
+            }
+          }
+        }
+      )
+
       socket.on(PLAYER.DRAW_CARD, (idRoom: string, username: string) => {
         let room = ROOMS[idRoom]
         let iPlayer = room.players.findIndex((p) => p.username == username)
@@ -310,7 +438,7 @@ const GameSocket = (io: Server) => {
         }
         if (player) {
           if (player.cards.length == 5) {
-            room.players[room.currentTurn].status = 'STAND'
+            player.status = 'STAND'
             room.message = `${username} bốc xong`
             room.currentTurn++
             if (room.currentTurn < room.players.length) {
@@ -365,6 +493,7 @@ const GameSocket = (io: Server) => {
                 },
               })
             }
+            ROOMS[idRoom] = room
             io.to(`ROOM-${idRoom}`).emit(GAME.START, {
               status: RESPONSE.SUCCESS,
               code: 200,
@@ -425,70 +554,42 @@ const GameSocket = (io: Server) => {
           }
         }
       })
-      // //new question
-      // socket.on(GAME.NEXT_QUESTION, (idGame, idQuestion) => {
-      //   // socket.emit(gamesQuestions.get(idQuest)[idQuestion]);
-      //   io.to(idGame).emit(GAME.NEW_QUESTION, idQuestion)
-      //   //client create time begin new quest
-      // })
 
-      // //question timeout
-      // socket.on(GAME.TIMEOUT, idGame => {
-      //   //emit to room game except sender
-      //   io.to(idGame).emit(GAME.TIMEOUT)
-      //   // idQuestion
-      // })
+      socket.on(GAME.END_GAME, (idRoom: number, username: string) => {
+        let room = ROOMS[idRoom]
+        ROOMS[idRoom] = newGame(room)
+        room.players.forEach(player => {
+          io.to(player.socketId).emit(GAME.START, {
+            code: 200,
+            status: RESPONSE.SUCCESS,
+            data: {
+              thisPlayer: player,
+            },
+          })
+        });
+        io.to(`ROOM-${idRoom}`).emit(GAME.START, {
+          status: RESPONSE.SUCCESS,
+          code: 200,
+          data: {
+            room: privateRoom(room),
+          },
+        })
+      })
 
-      // //answer
-      // socket.on(GAME.ANSWER, async (idGame, idQuestion, answer) => {
-      //   let scoreBoard
-      //   let quest = await Quest.getQuestFromIdGame(idGame)
-      //   let question = quest.questions[idQuestion]
-      //   if (answer.time === GAME.TIMEOUT) {
-      //     answer.time = question.duration
-      //   }
-      //   Quest.answer(idGame, answer.username, answer.idAnswer, answer.time, (err, idQuest) => {
-      //     if (err) {
-      //       console.log(err)
-      //       socket.emit(GAME.ANSWER, false, gamesScoreBoards.get(idGame.toString()))
-      //     } else {
-      //       // let question = gamesQuestions.get(idQuest.toString())[idQuestion];
-      //       let score =
-      //         question.correct_id == answer.idAnswer
-      //           ? question.correct_point
-      //           : question.incorrect_point
-      //       scoreBoard = gamesScoreBoards.get(idGame.toString())
-      //       let i = scoreBoard.findIndex(player => {
-      //         return player.username.toLowerCase() == answer.username.toLowerCase()
-      //       })
-
-      //       scoreBoard[i]['score'] += score
-      //       scoreBoard[i]['time'] += answer.time
-
-      //       gamesScoreBoards.set(idGame.toString(), scoreBoard)
-      //       socket.emit(GAME.CORRECT_ANSWER, question.correct_id == answer.idAnswer)
-      //       socket.to(idGame).emit(GAME.ANSWER, scoreBoard)
-      //     }
-      //   })
-      //   //emit to room game except sender
-      //   // io.in(idGame).emit(GAME.SCOREBOARD, scoreBoard);
-      // })
-
-      // //end game
-      // socket.on(GAME.END, idGame => {
-      //   //handler result
-      //   let scoreBoard = gamesScoreBoards.get(idGame.toString())
-      //   socket.to(idGame).emit(GAME.END, scoreBoard)
-      //   Utility.endGame(idGame)
-      //   console.log(`End game: ${idGame}`)
-      //   let rooms = io.sockets.adapter.sids[idGame]
-      //   for (let room in rooms) {
-      //     socket.leave(room)
-      //   }
-      //   // io.sockets.clients(idGame).map(player => {
-      //   //   player.leave(idGame)
-      //   // })
-      // })
+      socket.on(
+        PLAYER.LEAVE,
+        (idRoom: number, username: string, role: 'HOST' | 'PLAYER') => {
+          let room = ROOMS[idRoom]
+          if (role === 'PLAYER') {
+            let iPlayer = room.players.findIndex((p) => p.username == username)
+            let player = null
+            if (iPlayer >= 0) {
+              socket.leave(`ROOM-${idRoom}`)
+            }
+          } else {
+          }
+        }
+      )
 
       socket.on('disconnect', () => {
         console.log('client ' + socket.id + ' disconnected')
