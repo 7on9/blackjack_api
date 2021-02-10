@@ -60,6 +60,7 @@ export interface IRoom {
   deck: ICard[]
   phase: TGamePhase
   message: string
+  currentTurn: number
 }
 
 const ROOMS: IObjectProps<IRoom> = {}
@@ -84,6 +85,7 @@ const GameSocket = (io: Server) => {
             role: 'HOST',
             color: color ? color : COLORS[0],
           },
+          currentTurn: 0,
           phase: 'WAITING_PLAYER',
           message: 'Đang đợi những người chơi khác...',
           players: [],
@@ -154,6 +156,7 @@ const GameSocket = (io: Server) => {
               code: 200,
               data: {
                 username,
+                idRoom,
                 room,
                 thisPlayer: newPlayer,
               },
@@ -188,7 +191,7 @@ const GameSocket = (io: Server) => {
         })
       })
 
-      socket.on(PLAYER.SHUFFLE_DECK, (username: string, idRoom: string) => {
+      socket.on(PLAYER.SHUFFLE_DECK, (idRoom: string, username: string) => {
         console.log(`Shuffle deck: ${idRoom}`)
         let room = ROOMS[idRoom]
         room.deck = shuffleArray(room.deck)
@@ -244,7 +247,7 @@ const GameSocket = (io: Server) => {
           }
 
           room.message = 'Chia bài xong!'
-
+          room.players[0].status = 'DRAW'
           ROOMS[idRoom] = room
 
           io.to(`ROOM-${idRoom}`).emit(GAME.START, {
@@ -257,6 +260,171 @@ const GameSocket = (io: Server) => {
         }
       })
 
+      socket.on(PLAYER.HOLD, (idRoom: string, username: string) => {
+        let room = ROOMS[idRoom]
+        let iPlayer = room.players.findIndex((p) => p.username == username)
+        let player = null
+        if (iPlayer >= 0) {
+          player = room.players[iPlayer]
+          room.players[room.currentTurn].status = 'STAND'
+          room.message = `${username} bốc xong`
+          room.currentTurn++
+          if (room.currentTurn < room.players.length) {
+            room.players[room.currentTurn].status = 'DRAW'
+          } else {
+            room.host.status = 'DRAW'
+            io.to(room.host.socketId).emit(PLAYER.HOLD, {
+              status: RESPONSE.SUCCESS,
+              code: 200,
+              data: {
+                thisPlayer: room.host,
+              },
+            })
+          }
+
+          ROOMS[idRoom] = room
+          io.to(player.socketId).emit(PLAYER.HOLD, {
+            status: RESPONSE.SUCCESS,
+            code: 200,
+            data: {
+              thisPlayer: player,
+            },
+          })
+
+          io.to(`ROOM-${idRoom}`).emit(GAME.START, {
+            status: RESPONSE.SUCCESS,
+            code: 200,
+            data: {
+              room: privateRoom(room),
+            },
+          })
+        }
+      })
+
+      socket.on(PLAYER.DRAW_CARD, (idRoom: string, username: string) => {
+        let room = ROOMS[idRoom]
+        let iPlayer = room.players.findIndex((p) => p.username == username)
+        let player = null
+        if (iPlayer >= 0) {
+          player = room.players[iPlayer]
+        }
+        if (player) {
+          if (player.cards.length == 5) {
+            room.players[room.currentTurn].status = 'STAND'
+            room.message = `${username} bốc xong`
+            room.currentTurn++
+            if (room.currentTurn < room.players.length) {
+              room.players[room.currentTurn].status = 'DRAW'
+            } else {
+              room.host.status = 'DRAW'
+            }
+            io.to(`ROOM-${idRoom}`).emit(GAME.START, {
+              status: RESPONSE.SUCCESS,
+              code: 200,
+              data: {
+                room: privateRoom(room),
+              },
+            })
+          }
+          let { deck, card } = DeckServices.getCardFromDeck(room.deck, 'bottom')
+          player.cards.push(card as ICard)
+
+          room.deck = deck
+          room.players[iPlayer] = player
+          ROOMS[idRoom] = room
+
+          io.to(`ROOM-${idRoom}`).emit(GAME.START, {
+            status: RESPONSE.SUCCESS,
+            code: 200,
+            data: {
+              room: privateRoom(room),
+            },
+          })
+
+          io.to(player.socketId).emit(PLAYER.DRAW_CARD, {
+            code: 200,
+            status: RESPONSE.SUCCESS,
+            data: {
+              thisPlayer: player,
+            },
+          })
+
+          if (player.cards.length == 5) {
+            room.players[room.currentTurn].status = 'STAND'
+            room.message = `${username} bốc xong`
+            room.currentTurn++
+            if (room.currentTurn < room.players.length) {
+              room.players[room.currentTurn].status = 'DRAW'
+            } else {
+              room.host.status = 'DRAW'
+              io.to(room.host.socketId).emit(PLAYER.DRAW_CARD, {
+                code: 200,
+                status: RESPONSE.SUCCESS,
+                data: {
+                  thisPlayer: room.host,
+                },
+              })
+            }
+            io.to(`ROOM-${idRoom}`).emit(GAME.START, {
+              status: RESPONSE.SUCCESS,
+              code: 200,
+              data: {
+                room: privateRoom(room),
+              },
+            })
+          }
+        } else {
+          if (room.host.username == username) {
+            let player = room.host
+            if (player.cards.length == 5) {
+              room.message = `${username} bốc xong`
+              room.host.status = 'STAND'
+              ROOMS[idRoom] = room
+              io.to(`ROOM-${idRoom}`).emit(GAME.START, {
+                status: RESPONSE.SUCCESS,
+                code: 200,
+                data: {
+                  room: privateRoom(room),
+                },
+              })
+
+              io.to(room.host.socketId).emit(PLAYER.DRAW_CARD, {
+                code: 200,
+                status: RESPONSE.SUCCESS,
+                data: {
+                  thisPlayer: room.host,
+                },
+              })
+            } else {
+              let { deck, card } = DeckServices.getCardFromDeck(
+                room.deck,
+                'bottom'
+              )
+              player.cards.push(card as ICard)
+
+              room.deck = deck
+              room.host = player
+              ROOMS[idRoom] = room
+
+              io.to(`ROOM-${idRoom}`).emit(GAME.START, {
+                status: RESPONSE.SUCCESS,
+                code: 200,
+                data: {
+                  room: privateRoom(room),
+                },
+              })
+
+              io.to(player.socketId).emit(PLAYER.DRAW_CARD, {
+                code: 200,
+                status: RESPONSE.SUCCESS,
+                data: {
+                  thisPlayer: player,
+                },
+              })
+            }
+          }
+        }
+      })
       // //new question
       // socket.on(GAME.NEXT_QUESTION, (idGame, idQuestion) => {
       //   // socket.emit(gamesQuestions.get(idQuest)[idQuestion]);
