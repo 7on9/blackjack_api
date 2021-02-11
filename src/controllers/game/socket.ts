@@ -54,7 +54,7 @@ const privateRoom = (room: IRoom) => {
 }
 
 const newGame = (room: IRoom) => {
-  room.message = 'Đang chuản bị'
+  room.message = 'Đang chuẩn bị'
   room.currentTurn = 0
   room.deck = generateDeck()
   room.host.cards = []
