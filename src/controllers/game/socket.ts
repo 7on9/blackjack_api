@@ -239,6 +239,9 @@ const GameSocket = (io: Server) => {
           for (let round = 0; round < 2; round++) {
             for (let iPlayer = 0; iPlayer < room.players.length; iPlayer++) {
               let player = room.players[iPlayer]
+              if (!player) {
+                return
+              }
               let { deck, card } = DeckServices.getCardFromDeck(
                 room.deck,
                 'top'
@@ -269,7 +272,9 @@ const GameSocket = (io: Server) => {
           }
 
           room.message = 'Chia bài xong!'
-          room.players[0].status = 'DRAW'
+          if (room.players && room.players[0]){
+            room.players[0].status = 'DRAW'
+          }
           room.phase = 'DUEL'
           ROOMS[idRoom] = room
 
