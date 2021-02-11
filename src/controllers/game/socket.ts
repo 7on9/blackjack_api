@@ -59,6 +59,7 @@ const newGame = (room: IRoom) => {
   room.deck = generateDeck()
   room.host.cards = []
   room.host.duelResult = undefined
+  room.host.status = 'WAITING'
   room.phase = 'WAITING_PLAYER'
   room.players = room.players.map((p) => ({ ...p, cards: [], duelResult: undefined, status: 'WAITING' }))
   return room
